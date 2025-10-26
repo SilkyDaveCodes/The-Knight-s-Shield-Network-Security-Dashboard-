@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>The Knights Shield</title>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      background-color: #f4f4f4;
+    }
+    header {
+      background-color: #35424a;
+      color: #ffffff;
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    h1 { font-size: 18px; margin: 0; display: flex; align-items: center; }
+    h1 img { height: 28px; margin-right: 8px; }
+    #status { font-size: 12px; opacity: 0.7; }
+    .card {
+      background-color: #ffffff;
+      border-radius: 12px;
+      margin: 8px 12px;
+      padding: 10px 12px;
+      border: 1px solid #dddddd;
+    }
+    .row { display: flex; flex-wrap: wrap; justify-content: space-between; }
+    .score.ok { color:#16a34a; }
+    .score.warn { color:#facc15; }
+    .score.bad { color:#ef4444; }
+    button {
+      background-color: #35424a;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 10px;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    button:hover { background-color: #1e293b; }
+    .section-title { margin-left: 12px; margin-top: 20px; }
+  </style>
+</head>
+
+<body>
+  <header>
+    <h1>
+      <img src="images/The Knights Shield blank.png" alt="Knight's Shield Logo">
+      Shield Dashboard
+    </h1>
+    <div id="status">loading...</div>
+  </header>
+
+  <div id="list"></div>
+
+  <h2 class="section-title">Active Incidents</h2>
+  <div id="incidents"></div>
+
+  <h2 class="section-title">Incident History</h2>
+  <div id="history" style="margin-bottom:40px;"></div>
+
+  <script>
+    let incidents = [];
+    let history = [];
+
+    async function loadData(){
+      try {
+        const response = await fetch("http://127.0.0.1:8000/api/packets");
+        const data = await response.json();
+        render(data);
+        document.getElementById("status").textContent =
+          "Updated from Snowflake " + new Date().toLocaleTimeString();
+      } catch(err) {
+        console.error("Error loading data: ", err);
+        document.getElementById("status").textContent = "Error connecting to API";
+      }
+    }
+
+    function scoreClass(s){
+      if(s>=0.8) return "bad";
+      if(s>=0.7) return "warn";
+      return "ok";
+    }
+
+    function render(data){
+      const list = document.getElementById("list");
+      list.innerHTML = "";
+      data.slice(0,10).forEach(d => {
+        const score = d.SUSPICIOUS_SCORE ?? 0;
+        const proto = d.PROTO || "unknown";
+        const dstPort = d.DST_PORT || "N/A";
+        const len = d.LEN || 0;
+        const host = d.HOST_SNI || "N/A";
+
+        const div = document.createElement("div");
+        div.className = "card";
+        div.innerHTML = `
+          <div class="row">
+            <div><b>${d.SRC}</b> → ${d.DST}</div>
+            <div class="score ${scoreClass(score)}">Score: ${score.toFixed(2)}</div>
+          </div>
+          <div class="row">
+            <div>proto: ${proto}</div>
+            <div>dst port: ${dstPort}</div>
+            <div>len: ${len}</div>
+            <div>host: ${host}</div>
+          </div>
+        `;
+        list.appendChild(div);
+
+        if(score >= 0.8){
+          const id = `${d.SRC}_${d.DST}`;
+          const exists = incidents.some(i => i.id === id);
+          if(!exists){
+            const newIncident = {
+              id: id,
+              src: d.SRC,
+              dst: d.DST,
+              score: score,
+              reason: d.REASON || "High suspicious score",
+              proto: proto,
+              dst_port: dstPort,
+              len: len,
+              host_sni: host,
+              payload_hash: d.PAYLOAD_HASH || "N/A",
+              timestamp: new Date().toLocaleString()
+            };
+            incidents.push(newIncident);
+          }
+        }
+      });
+
+      if(incidents.length > 10) incidents = incidents.slice(-10);
+      renderIncidents();
+    }
+
+    function renderIncidents(){
+      const zone = document.getElementById("incidents");
+      zone.innerHTML = "";
+      if(incidents.length === 0){
+        zone.innerHTML = "<i>No active incidents</i>";
+        return;
+      }
+      incidents.forEach(i => {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.style.border = "1px solid #ef4444";
+        card.innerHTML = `
+          <div class="row">
+            <div><b>${i.src}</b> → ${i.dst}</div>
+            <div class="score bad">Score: ${i.score.toFixed(2)}</div>
+          </div>
+          <p>Reason: ${i.reason}</p>
+          <div class="row">
+            <button onclick="clearIncident('${i.id}')">Clear Incident</button>
+            <button onclick="createReport('${i.id}')">Create Incident Report</button>
+          </div>
+        `;
+        zone.appendChild(card);
+      });
+    }
+
+    function renderHistory(){
+      const zone = document.getElementById("history");
+      zone.innerHTML = "";
+      if(history.length === 0){
+        zone.innerHTML = "<i>No history yet</i>";
+        return;
+      }
+      history.forEach(i => {
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `
+          <div class="row">
+            <div><b>${i.src}</b> → ${i.dst}</div>
+            <div class="score bad">Score: ${i.score.toFixed(2)}</div>
+          </div>
+          <p>Reason: ${i.reason}</p>
+          <p><i>Cleared at ${i.cleared_at}</i></p>
+        `;
+        zone.appendChild(card);
+      });
+    }
+
+    function clearIncident(id){
+      const i = incidents.find(x => x.id === id);
+      if(!i) return alert("Incident not found.");
+      incidents = incidents.filter(x => x.id !== id);
+      i.cleared_at = new Date().toLocaleString();
+      history.push(i);
+      renderIncidents();
+      renderHistory();
+    }
+
+    async function createReport(id){
+      const i = incidents.find(x => x.id === id);
+      if (!i) return alert("Incident not found.");
+
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF();
+
+      doc.setFontSize(18);
+      doc.text("Knights NetSec Team Incident Report", 20, 20);
+      doc.setFontSize(12);
+      doc.text("Generated: " + new Date().toLocaleString(), 20, 30);
+      doc.text("Incident ID: " + i.id, 20, 40);
+
+      const details = [
+        ["Source IP", i.src],
+        ["Destination IP", i.dst],
+        ["Score", i.score.toFixed(2)],
+        ["Reason", i.reason],
+        ["Timestamp", i.timestamp],
+        ["Protocol", i.proto || "Unknown"],
+        ["Destination Port", i.dst_port || "N/A"],
+        ["Length", i.len || "N/A"],
+        ["Host", i.host_sni || "N/A"],
+        ["Payload Hash", i.payload_hash || "N/A"]
+      ];
+
+      let y = 55;
+      details.forEach(([label, value]) => {
+        doc.text(`${label}: ${value}`, 20, y);
+        y += 8;
+      });
+
+      doc.setFontSize(10);
+      doc.text("This report was automatically generated by the Knights NetSec Dashboard.", 20, 260);
+
+      // --- Add logo bottom center ---
+      const logo = new Image();
+      logo.src = "images/The Knights Shield.png";
+      logo.onload = function() {
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const logoWidth = 30;
+        const logoX = (pageWidth - logoWidth) / 2;
+        doc.addImage(logo, "PNG", logoX, 265, logoWidth, 25);
+        const fileName = `Incident_Report_${i.timestamp}.pdf`;
+        doc.save(fileName);
+      };
+    }
+
+    loadData();
+    setInterval(loadData, 5000);
+  </script>
+</body>
+</html>
